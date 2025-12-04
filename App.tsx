@@ -38,10 +38,27 @@ const App: React.FC = () => {
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const newUrls = Array.from(e.target.files).map(file => URL.createObjectURL(file));
-      // Mix with defaults or replace? Let's replace if enough, or append.
-      // Re-generate layout
-      setPhotos(createPhotoLayouts(newUrls));
+      
+      setPhotos(prevPhotos => {
+        // Check if currently showing defaults (if so, we replace them, otherwise we append)
+        const isDefault = prevPhotos.length > 0 && prevPhotos[0].url.includes('picsum.photos');
+        
+        let updatedUrls: string[];
+        if (isDefault) {
+           updatedUrls = newUrls;
+        } else {
+           // Append to existing user photos
+           const currentUrls = prevPhotos.map(p => p.url);
+           updatedUrls = [...currentUrls, ...newUrls];
+        }
+        
+        return createPhotoLayouts(updatedUrls);
+      });
+
       setAppState(AppState.SCATTERED); // Start scattered to see them
+      
+      // Reset input value so the same files can be selected again if needed
+      e.target.value = '';
     }
   };
 
@@ -63,9 +80,7 @@ const App: React.FC = () => {
   const handleGestureChange = (newGesture: HandGesture) => {
     setGesture(newGesture);
 
-    // Debounce state changes or direct mapping?
-    // Direct mapping for responsiveness, but check Inspecting lock.
-    
+    // Lock transitions during inspection
     if (appState === AppState.INSPECTING) {
        // Only exit inspecting if we release pinch or fist
        if (newGesture.type === 'CLOSED') {
@@ -93,8 +108,15 @@ const App: React.FC = () => {
       }
   };
 
+  // Calculate cursor screen position (percentage)
+  // Gesture X: -1 (Left Hand/Phys Right) to 1 (Right Hand/Phys Left)
+  // We want Phys Right (-1) to be Screen Right (1) to match Mirrored Video
+  // So Target X = -Gesture X
+  const cursorX = gesture.isDetected ? (-gesture.position.x * 0.5 + 0.5) * 100 : 50;
+  const cursorY = gesture.isDetected ? (gesture.position.y * -0.5 + 0.5) * 100 : 50;
+
   return (
-    <div className="relative w-full h-screen bg-[#050505] text-white overflow-hidden font-sans">
+    <div className="relative w-full h-screen bg-[#050505] text-white overflow-hidden font-sans cursor-none">
       
       {/* 3D Canvas */}
       <Canvas shadows camera={{ position: [0, 0, 20], fov: 45 }} gl={{ antialias: false }}>
@@ -123,6 +145,23 @@ const App: React.FC = () => {
       </Canvas>
       
       <Loader />
+
+      {/* Main Screen Cursor */}
+      {gesture.isDetected && (
+          <div 
+            className="absolute w-8 h-8 rounded-full border-2 border-[#D4AF37] pointer-events-none z-50 transform -translate-x-1/2 -translate-y-1/2 mix-blend-difference shadow-[0_0_15px_#D4AF37]"
+            style={{ 
+                left: `${cursorX}%`,
+                top: `${cursorY}%`,
+                backgroundColor: gesture.type === 'PINCH' ? 'rgba(212, 175, 55, 0.8)' : 'transparent',
+                scale: gesture.type === 'PINCH' ? 0.8 : 1,
+                transition: 'scale 0.2s ease'
+            }}
+          >
+             {/* Center dot */}
+             <div className="absolute top-1/2 left-1/2 w-1 h-1 bg-white rounded-full transform -translate-x-1/2 -translate-y-1/2" />
+          </div>
+      )}
 
       {/* UI Overlay */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none flex flex-col justify-between p-8 z-10">
@@ -183,13 +222,17 @@ const App: React.FC = () => {
                      <div className="absolute bottom-1 right-1 text-[10px] text-[#D4AF37]">
                          {gesture.isDetected ? `DETECTED: ${gesture.type}` : 'NO HAND'}
                      </div>
-                     {/* Cursor Visualizer */}
+                     {/* Debug Visualizer - Coordinates logic must match Screen Cursor */}
                      {gesture.isDetected && (
                          <div 
-                            className="absolute w-3 h-3 bg-red-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 transition-all duration-75"
+                            className="absolute w-2 h-2 bg-red-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 transition-all duration-75"
                             style={{ 
-                                left: `${(gesture.position.x * 0.5 + 0.5) * 100}%`, // Map back to 0-1 for UI
-                                top: `${(gesture.position.y * -0.5 + 0.5) * 100}%`,
+                                // The Video element IS flipped, so "Left" on this container maps to "Right" in video visual.
+                                // If Gesture X = -1 (Phys Right), we want cursor on the visual Right of this box.
+                                // Visual Right is Left: 100%. 
+                                // -1 -> 100%, 1 -> 0%
+                                left: `${(-gesture.position.x * 0.5 + 0.5) * 100}%`,
+                                top: `${cursorY}%`,
                                 backgroundColor: gesture.type === 'PINCH' ? '#D4AF37' : 'rgba(255,255,255,0.5)'
                             }}
                          />

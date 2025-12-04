@@ -1,4 +1,4 @@
-import { Vector3, MathUtils } from 'three';
+import { Vector3 } from 'three';
 import { ParticleData, PhotoData } from '../types';
 
 // Palette

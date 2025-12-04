@@ -11,6 +11,10 @@ const HandController: React.FC<HandControllerProps> = ({ onGestureChange, videoR
   const [loaded, setLoaded] = useState(false);
   const landmarkerRef = useRef<HandLandmarker | null>(null);
   const requestRef = useRef<number | null>(null);
+  
+  // Smoothing refs
+  const smoothPosRef = useRef({ x: 0, y: 0 });
+  const lastGestureTypeRef = useRef<HandGesture['type']>('NONE');
 
   useEffect(() => {
     const init = async () => {
@@ -67,17 +71,18 @@ const HandController: React.FC<HandControllerProps> = ({ onGestureChange, videoR
         });
         avgDistToWrist /= tips.length;
 
-        // Coordinates: MediaPipe X is 0 (left) to 1 (right). 
-        // We invert X for mirroring effect if using front camera usually, 
-        // but let's send raw normalized first.
-        const position = { 
-          x: (landmarks[9].x - 0.5) * 2, // Center 0, range -1 to 1
-          y: -(landmarks[9].y - 0.5) * 2 // Invert Y for 3D mapping
-        };
+        // Raw Coordinates: MediaPipe X is 0 (left) to 1 (right). 
+        const rawX = (landmarks[9].x - 0.5) * 2; // -1 to 1
+        const rawY = -(landmarks[9].y - 0.5) * 2; // Invert Y: -1 (bot) to 1 (top)
+
+        // Smoothing (Lerp)
+        const lerpFactor = 0.2; // 0.1 is very smooth/slow, 0.5 is snappy
+        smoothPosRef.current.x = smoothPosRef.current.x + (rawX - smoothPosRef.current.x) * lerpFactor;
+        smoothPosRef.current.y = smoothPosRef.current.y + (rawY - smoothPosRef.current.y) * lerpFactor;
 
         let type: HandGesture['type'] = 'OPEN';
 
-        // Thresholds need tuning
+        // Thresholds
         if (pinchDist < 0.05) {
           type = 'PINCH';
         } else if (avgDistToWrist < 0.25) { 
@@ -87,9 +92,12 @@ const HandController: React.FC<HandControllerProps> = ({ onGestureChange, videoR
           type = 'OPEN';
         }
 
+        // Debounce gesture type slightly to prevent flickering? 
+        // For now, raw type is fine, but position is smoothed.
+        
         onGestureChange({
           type,
-          position,
+          position: { ...smoothPosRef.current },
           isDetected: true
         });
       } else {

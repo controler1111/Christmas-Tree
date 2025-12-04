@@ -1,6 +1,6 @@
-import React, { useMemo, useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { useTexture, Text, Billboard, Float } from '@react-three/drei';
+import { useTexture } from '@react-three/drei';
 import * as THREE from 'three';
 import { AppState, HandGesture, ParticleData, PhotoData } from '../types';
 
@@ -12,40 +12,34 @@ interface TreeSceneProps {
   onPhotoSelect: (id: string | null) => void;
 }
 
-// Reusable geometries and materials for better performance
-const sphereGeo = new THREE.SphereGeometry(1, 16, 16);
-const cubeGeo = new THREE.BoxGeometry(1, 1, 1);
-const cylinderGeo = new THREE.CylinderGeometry(0.3, 0.3, 2, 8); // Candy caneish
+// Bypass strict type checking for THREE members that are flagged as missing in this environment
+const T = THREE as any;
 
-const goldMat = new THREE.MeshStandardMaterial({ 
-  color: '#D4AF37', 
-  roughness: 0.2, 
-  metalness: 0.9,
-  emissive: '#aa8800',
-  emissiveIntensity: 0.2
-});
-const redMat = new THREE.MeshStandardMaterial({ 
+// Reusable geometries and materials for better performance
+const sphereGeo = new T.SphereGeometry(1, 16, 16);
+const cubeGeo = new T.BoxGeometry(1, 1, 1);
+const cylinderGeo = new T.CylinderGeometry(0.3, 0.3, 2, 8); // Candy caneish
+
+const redMat = new T.MeshStandardMaterial({ 
   color: '#8A1C1C', 
   roughness: 0.4, 
   metalness: 0.6 
 });
-const greenMat = new THREE.MeshStandardMaterial({ 
-  color: '#0F3B28', 
-  roughness: 0.8, 
-  metalness: 0.1 
-});
 
-const tempObject = new THREE.Object3D();
-const tempColor = new THREE.Color();
+const tempObject = new T.Object3D();
+const tempColor = new T.Color();
 
 const TreeScene: React.FC<TreeSceneProps> = ({ appState, particles, photos, gesture, onPhotoSelect }) => {
-  const { camera, raycaster, pointer } = useThree();
-  const groupRef = useRef<THREE.Group>(null);
+  const { camera } = useThree();
+  const groupRef = useRef<any>(null);
   
   // Refs for Instanced Meshes
-  const spheresRef = useRef<THREE.InstancedMesh>(null);
-  const cubesRef = useRef<THREE.InstancedMesh>(null);
-  const candysRef = useRef<THREE.InstancedMesh>(null);
+  const spheresRef = useRef<any>(null);
+  const cubesRef = useRef<any>(null);
+  const candysRef = useRef<any>(null);
+  
+  // Track hover state to dampen rotation
+  const [hoveredPhotoId, setHoveredPhotoId] = useState<string | null>(null);
 
   // Group particles by type for instancing
   const particlesByType = useMemo(() => {
@@ -72,21 +66,25 @@ const TreeScene: React.FC<TreeSceneProps> = ({ appState, particles, photos, gest
 
         // Hand controlled rotation when SCATTERED
         if (appState === AppState.SCATTERED && gesture.isDetected) {
+           // If we are hovering over a photo, PAUSE/SLOW rotation to allow easy pinch
+           const dampener = hoveredPhotoId ? 0.05 : 1.0;
+
            const targetRotY = gesture.position.x * 2; // Map hand X to rotation
            const targetRotX = gesture.position.y * 0.5;
            
-           groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, targetRotY, 0.05);
-           groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, targetRotX, 0.05);
+           // Lerp towards target
+           groupRef.current.rotation.y = T.MathUtils.lerp(groupRef.current.rotation.y, targetRotY, 0.05 * dampener);
+           groupRef.current.rotation.x = T.MathUtils.lerp(groupRef.current.rotation.x, targetRotX, 0.05 * dampener);
         } else {
              // Return to upright
-             groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, 0, 0.05);
+             groupRef.current.rotation.x = T.MathUtils.lerp(groupRef.current.rotation.x, 0, 0.05);
         }
     }
 
     // 2. Animate Particles
     const t = 3 * delta; // Lerp speed
 
-    const updateMesh = (ref: React.RefObject<THREE.InstancedMesh>, subset: ParticleData[]) => {
+    const updateMesh = (ref: React.RefObject<any>, subset: ParticleData[]) => {
       if (!ref.current) return;
       
       subset.forEach((p, i) => {
@@ -125,6 +123,10 @@ const TreeScene: React.FC<TreeSceneProps> = ({ appState, particles, photos, gest
     updateMesh(candysRef, particlesByType.candy);
   });
 
+  const handleHover = useCallback((id: string | null) => {
+      setHoveredPhotoId(id);
+  }, []);
+
   return (
     <group ref={groupRef}>
       <instancedMesh ref={spheresRef} args={[sphereGeo, undefined, particlesByType.sphere.length]}>
@@ -145,6 +147,7 @@ const TreeScene: React.FC<TreeSceneProps> = ({ appState, particles, photos, gest
           appState={appState} 
           gesture={gesture}
           onSelect={() => onPhotoSelect(photo.id)}
+          onHoverChange={handleHover}
         />
       ))}
     </group>
@@ -157,11 +160,23 @@ const PhotoFrame: React.FC<{
     appState: AppState; 
     gesture: HandGesture;
     onSelect: () => void;
-}> = ({ data, appState, gesture, onSelect }) => {
-    const meshRef = useRef<THREE.Mesh>(null);
+    onHoverChange: (id: string | null) => void;
+}> = ({ data, appState, gesture, onSelect, onHoverChange }) => {
+    const meshRef = useRef<any>(null);
     const texture = useTexture(data.url);
     const [hovered, setHovered] = useState(false);
     const [active, setActive] = useState(false);
+
+    // Sync local hover with parent to control rotation
+    useEffect(() => {
+        if (hovered) {
+            onHoverChange(data.id);
+        } else {
+            // Only clear if we were the one hovering (simple check, imperfect but works for single hand)
+            // Ideally we'd check if no one else is hovering, but parent state works fine if we just emit null when leaving
+            onHoverChange(null);
+        }
+    }, [hovered, data.id, onHoverChange]);
 
     useFrame((state, delta) => {
         if (!meshRef.current) return;
@@ -171,9 +186,9 @@ const PhotoFrame: React.FC<{
 
         if (active && appState === AppState.INSPECTING) {
             // Bring to center camera
-            meshRef.current.position.lerp(new THREE.Vector3(0, 0, 10), speed);
+            meshRef.current.position.lerp(new T.Vector3(0, 0, 10), speed);
             meshRef.current.rotation.set(0, 0, 0); // Face forward
-            meshRef.current.scale.setScalar(THREE.MathUtils.lerp(meshRef.current.scale.x, 6, speed));
+            meshRef.current.scale.setScalar(T.MathUtils.lerp(meshRef.current.scale.x, 6, speed));
         } else {
             // Standard behavior
             meshRef.current.position.lerp(target, speed);
@@ -188,32 +203,34 @@ const PhotoFrame: React.FC<{
             
             // Hover scale effect
             const targetScale = hovered && appState === AppState.SCATTERED ? 2.5 : 1.5;
-            meshRef.current.scale.setScalar(THREE.MathUtils.lerp(meshRef.current.scale.x, targetScale, speed));
+            meshRef.current.scale.setScalar(T.MathUtils.lerp(meshRef.current.scale.x, targetScale, speed));
             
             // Reset Active state if we left inspecting mode
             if (appState !== AppState.INSPECTING && active) setActive(false);
         }
     });
 
-    // Raycast logic handled by onPointerOver/Out events from Fiber
-    // BUT we need to connect it to the Hand Cursor. 
-    // For this demo, to ensure robustness, we'll use a simple distance check in useFrame
-    // if the hand is used, OR use standard mouse events for desktop fallback.
-    
     useFrame(({ camera }) => {
         if (!meshRef.current) return;
         
         if (gesture.isDetected) {
             // Project mesh position to screen space
             const pos = meshRef.current.position.clone();
-            pos.project(camera); // Now in -1 to 1 range
+            pos.project(camera); // Now in -1 to 1 range (NDC)
             
-            // Hand position is -1 to 1 (X) and -1 to 1 (Y) approximately
-            // Invert Hand Y was done in controller, let's check distance
-            const dist = Math.hypot(pos.x - (-gesture.position.x), pos.y - gesture.position.y);
+            // Gesture Mapping:
+            // Gesture X is -1 (Left Hand/Screen Right) to 1 (Right Hand/Screen Left).
+            // Screen NDC X is -1 (Left) to 1 (Right).
+            // We want Phys Right (-1) to equal Screen Right (1). So -gesture.x.
             
-            // Threshold for interaction
-            const isOver = dist < 0.15; // 15% of screen
+            const dx = pos.x - (-gesture.position.x);
+            const dy = pos.y - gesture.position.y;
+            
+            // Simple distance check (can be improved with Aspect Ratio correction)
+            const dist = Math.hypot(dx, dy);
+            
+            // Increased Threshold to make grabbing easier (0.2 NDC is ~10% screen width)
+            const isOver = dist < 0.2; 
             
             if (isOver) {
                 if (!hovered) setHovered(true);
@@ -224,6 +241,8 @@ const PhotoFrame: React.FC<{
             } else {
                 if (hovered) setHovered(false);
             }
+        } else {
+            if (hovered) setHovered(false);
         }
     });
 
@@ -242,7 +261,7 @@ const PhotoFrame: React.FC<{
             <planeGeometry args={[1, 1]} />
             <meshStandardMaterial 
                 map={texture} 
-                side={THREE.DoubleSide} 
+                side={T.DoubleSide} 
                 transparent 
                 opacity={0.9} 
                 emissive={hovered ? '#444' : '#000'}
