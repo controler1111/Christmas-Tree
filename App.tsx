@@ -7,6 +7,15 @@ import { createParticles, createPhotoLayouts } from './utils/math';
 import TreeScene from './components/TreeScene';
 import HandController from './components/HandController';
 
+// Declare R3F elements to fix TypeScript errors
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      [elemName: string]: any;
+    }
+  }
+}
+
 // Default Placeholders
 const DEFAULT_PHOTOS = [
   'https://picsum.photos/400/400?random=1',
@@ -211,7 +220,7 @@ const App: React.FC = () => {
              </div>
 
              <div className="text-right pointer-events-auto">
-                 <div className="relative w-32 h-24 border border-[#1a4c35] bg-black/50 rounded overflow-hidden">
+                 <div className="relative w-64 h-48 border border-[#1a4c35] bg-black/50 rounded overflow-hidden">
                      {/* Video Feed Mirror */}
                      <video 
                         ref={videoRef} 
@@ -225,7 +234,7 @@ const App: React.FC = () => {
                      {/* Debug Visualizer - Coordinates logic must match Screen Cursor */}
                      {gesture.isDetected && (
                          <div 
-                            className="absolute w-2 h-2 bg-red-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 transition-all duration-75"
+                            className="absolute w-3 h-3 bg-red-500 rounded-full transform -translate-x-1/2 -translate-y-1/2 transition-all duration-75"
                             style={{ 
                                 // The Video element IS flipped, so "Left" on this container maps to "Right" in video visual.
                                 // If Gesture X = -1 (Phys Right), we want cursor on the visual Right of this box.

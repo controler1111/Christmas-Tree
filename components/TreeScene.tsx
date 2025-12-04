@@ -4,6 +4,15 @@ import { useTexture } from '@react-three/drei';
 import * as THREE from 'three';
 import { AppState, HandGesture, ParticleData, PhotoData } from '../types';
 
+// Declare R3F elements to fix TypeScript errors
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      [elemName: string]: any;
+    }
+  }
+}
+
 interface TreeSceneProps {
   appState: AppState;
   particles: ParticleData[];
@@ -61,8 +70,10 @@ const TreeScene: React.FC<TreeSceneProps> = ({ appState, particles, photos, gest
   useFrame((state, delta) => {
     // 1. Global Rotation based on Gesture
     if (groupRef.current) {
-        // Base rotation
-        groupRef.current.rotation.y += 0.05 * delta;
+        // Base rotation - PAUSE IF INSPECTING
+        if (appState !== AppState.INSPECTING) {
+             groupRef.current.rotation.y += 0.05 * delta;
+        }
 
         // Hand controlled rotation when SCATTERED
         if (appState === AppState.SCATTERED && gesture.isDetected) {
@@ -75,8 +86,8 @@ const TreeScene: React.FC<TreeSceneProps> = ({ appState, particles, photos, gest
            // Lerp towards target
            groupRef.current.rotation.y = T.MathUtils.lerp(groupRef.current.rotation.y, targetRotY, 0.05 * dampener);
            groupRef.current.rotation.x = T.MathUtils.lerp(groupRef.current.rotation.x, targetRotX, 0.05 * dampener);
-        } else {
-             // Return to upright
+        } else if (appState !== AppState.INSPECTING) {
+             // Return to upright if not inspecting
              groupRef.current.rotation.x = T.MathUtils.lerp(groupRef.current.rotation.x, 0, 0.05);
         }
     }
@@ -99,7 +110,7 @@ const TreeScene: React.FC<TreeSceneProps> = ({ appState, particles, photos, gest
         // Inspect mode: Push particles away from center to clear view
         if (appState === AppState.INSPECTING) {
              const dist = tempObject.position.length();
-             if (dist < 5) tempObject.position.multiplyScalar(1.05);
+             if (dist < 8) tempObject.position.multiplyScalar(1.05);
         }
 
         // Rotation
@@ -173,7 +184,6 @@ const PhotoFrame: React.FC<{
             onHoverChange(data.id);
         } else {
             // Only clear if we were the one hovering (simple check, imperfect but works for single hand)
-            // Ideally we'd check if no one else is hovering, but parent state works fine if we just emit null when leaving
             onHoverChange(null);
         }
     }, [hovered, data.id, onHoverChange]);
@@ -185,23 +195,47 @@ const PhotoFrame: React.FC<{
         const speed = 4 * delta;
 
         if (active && appState === AppState.INSPECTING) {
-            // Bring to center camera
-            meshRef.current.position.lerp(new T.Vector3(0, 0, 10), speed);
-            meshRef.current.rotation.set(0, 0, 0); // Face forward
+            // --- INSPECTION LOGIC ---
+            // 1. Calculate Target Position: Straight in front of camera
+            // Camera is typically at (0, 0, 20). We place photo at (0, 0, 14) so it fills screen nicely.
+            const targetWorldPos = new THREE.Vector3(0, 0, 14);
+
+            // 2. Convert World Position to Local Space
+            // Because the parent group might be rotated, we need to map the "Screen Center" 
+            // back into the rotated local coordinate system of the tree.
+            if (meshRef.current.parent) {
+                const parent = meshRef.current.parent;
+                // Get inverse of parent world matrix
+                const parentWorldInv = parent.matrixWorld.clone().invert();
+                // Apply inverse to our desired world target
+                targetWorldPos.applyMatrix4(parentWorldInv);
+            }
+
+            // Lerp position to this calculated local target
+            meshRef.current.position.lerp(targetWorldPos, speed);
+
+            // 3. Rotation: Always face the camera
+            // lookAt works in World Space, so it's straightforward
+            meshRef.current.lookAt(state.camera.position.x, state.camera.position.y, state.camera.position.z);
+            
+            // 4. Scale up
             meshRef.current.scale.setScalar(T.MathUtils.lerp(meshRef.current.scale.x, 6, speed));
+
         } else {
-            // Standard behavior
+            // --- STANDARD BEHAVIOR ---
             meshRef.current.position.lerp(target, speed);
             
-            // Look at center usually
+            // Orientation logic
             if (appState === AppState.ASSEMBLED) {
+                 // Face outward from center
                  meshRef.current.lookAt(0, meshRef.current.position.y, 0);
             } else {
+                 // Idle rotation in scattered mode
                  meshRef.current.rotation.x += 0.01;
                  meshRef.current.rotation.y += 0.01;
             }
             
-            // Hover scale effect
+            // Scale logic (Hover effect)
             const targetScale = hovered && appState === AppState.SCATTERED ? 2.5 : 1.5;
             meshRef.current.scale.setScalar(T.MathUtils.lerp(meshRef.current.scale.x, targetScale, speed));
             
@@ -216,6 +250,8 @@ const PhotoFrame: React.FC<{
         if (gesture.isDetected) {
             // Project mesh position to screen space
             const pos = meshRef.current.position.clone();
+            // Important: We need the World Position for projection, not local
+            meshRef.current.getWorldPosition(pos);
             pos.project(camera); // Now in -1 to 1 range (NDC)
             
             // Gesture Mapping:
@@ -226,10 +262,10 @@ const PhotoFrame: React.FC<{
             const dx = pos.x - (-gesture.position.x);
             const dy = pos.y - gesture.position.y;
             
-            // Simple distance check (can be improved with Aspect Ratio correction)
+            // Distance check
             const dist = Math.hypot(dx, dy);
             
-            // Increased Threshold to make grabbing easier (0.2 NDC is ~10% screen width)
+            // Threshold
             const isOver = dist < 0.2; 
             
             if (isOver) {
